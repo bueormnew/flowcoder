@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Caches and checkpoints
+checkpoints/
+models/
+*.safetensors
+*.pt
+*.bin
+*.onnx
+
+# Output samples
+*.png
+*.jpg
+*.jpeg
+output*/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
