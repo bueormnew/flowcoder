@@ -35,6 +35,16 @@ class HFTextEncoder(BaseTextEncoder):
         self.max_length = max_length
         self._dim = None
 
+        # Asegurar parche de compatibilidad para PyTorch / transformers distributed utils
+        try:
+            import torch._utils
+            if not hasattr(torch._utils, "_chunk_or_narrow_cat"):
+                def _chunk_or_narrow_cat(tensor, num_chunks, narrow_dim, cat_dim=0):
+                    return torch.cat(torch.chunk(tensor, num_chunks, dim=narrow_dim), dim=cat_dim)
+                torch._utils._chunk_or_narrow_cat = _chunk_or_narrow_cat
+        except Exception:
+            pass
+
         from transformers import AutoTokenizer, AutoModel
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
         
