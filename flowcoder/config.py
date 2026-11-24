@@ -58,7 +58,8 @@ class PipelineConfig:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         core_cfg = CoreConfig.from_dict(data.pop("core", {}))
-        return cls(core=core_cfg, **data)
+        filtered = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        return cls(core=core_cfg, **filtered)
 
 
 @dataclass

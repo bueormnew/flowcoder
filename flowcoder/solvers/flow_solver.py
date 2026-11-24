@@ -26,20 +26,25 @@ class FlowSolver:
         Integrador Euler de 1.er orden: x_{t - dt} = x_t - v * dt.
         Ideal para 1 a 4 pasos ultra-rápidos.
         """
+        if steps < 1:
+            raise ValueError(f"steps debe ser >= 1, recibido {steps}")
         dt = 1.0 / steps
         x = latents
+        core_model = getattr(model, "module", model)
 
         for step in range(steps):
             t_val = 1.0 - (step * dt)
 
-            if one_pass_guidance and hasattr(model, "guidance_embed") and model.guidance_embed is not None:
+            if one_pass_guidance and hasattr(core_model, "guidance_embed") and core_model.guidance_embed is not None:
                 # 1-pass guidance: Se evalúa el modelo una sola vez por paso
                 v = model(x, t_val, txt_ctx, txt_mask, guidance=cfg_scale)
             else:
                 # 2-pass CFG tradicional
                 if cfg_scale > 1.0:
                     v_cond = model(x, t_val, txt_ctx, txt_mask)
-                    null_txt = model.null_text_token.expand(txt_ctx.shape[0], txt_ctx.shape[1], -1)
+                    null_txt = core_model.null_text_token.to(device=txt_ctx.device, dtype=txt_ctx.dtype).expand(
+                        txt_ctx.shape[0], txt_ctx.shape[1], -1
+                    )
                     v_uncond = model(x, t_val, null_txt, None)
                     v = v_uncond + cfg_scale * (v_cond - v_uncond)
                 else:
@@ -63,20 +68,26 @@ class FlowSolver:
         steps: int = 2,
         cfg_scale: float = 3.0,
         one_pass_guidance: bool = True,
+        callback: Optional[Callable[[int, torch.Tensor], None]] = None,
     ) -> torch.Tensor:
         """
         Integrador Heun de 2.° orden (Predictor-Corrector).
         Excelente fidelidad en 2 a 4 pasos gracias a corrección de curvatura residual.
         """
+        if steps < 1:
+            raise ValueError(f"steps debe ser >= 1, recibido {steps}")
         dt = 1.0 / steps
         x = latents
+        core_model = getattr(model, "module", model)
 
         def get_v(curr_x, curr_t):
-            if one_pass_guidance and hasattr(model, "guidance_embed") and model.guidance_embed is not None:
+            if one_pass_guidance and hasattr(core_model, "guidance_embed") and core_model.guidance_embed is not None:
                 return model(curr_x, curr_t, txt_ctx, txt_mask, guidance=cfg_scale)
             if cfg_scale > 1.0:
                 v_c = model(curr_x, curr_t, txt_ctx, txt_mask)
-                null_txt = model.null_text_token.expand(txt_ctx.shape[0], txt_ctx.shape[1], -1)
+                null_txt = core_model.null_text_token.to(device=txt_ctx.device, dtype=txt_ctx.dtype).expand(
+                    txt_ctx.shape[0], txt_ctx.shape[1], -1
+                )
                 v_u = model(curr_x, curr_t, null_txt, None)
                 return v_u + cfg_scale * (v_c - v_u)
             return model(curr_x, curr_t, txt_ctx, txt_mask)
@@ -95,5 +106,8 @@ class FlowSolver:
                 x = x - 0.5 * (v1 + v2) * dt
             else:
                 x = x_pred
+
+            if callback is not None:
+                callback(step, x)
 
         return x

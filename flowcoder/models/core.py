@@ -92,6 +92,8 @@ class CrossAttentionBlock(nn.Module):
         if mask is not None:
             # mask: (B, L) bool
             attn_mask = mask[:, None, None, :] # (B, 1, 1, L)
+            if attn_mask.dtype != torch.bool and not attn_mask.is_floating_point():
+                attn_mask = attn_mask.bool()
 
         out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
         out = out.transpose(1, 2).reshape(B, H * W, C)
@@ -258,7 +260,7 @@ class MobileCoreDenoiser(nn.Module):
             t = t.repeat(B)
 
         # 1. Proyección de tiempo
-        c = self.time_mlp(self.time_embed(t))
+        c = self.time_mlp(self.time_embed(t).to(dtype=x.dtype))
 
         # 2. Proyección de escala de guía (si está habilitado para 1-pass CFG)
         if self.guidance_embed is not None and guidance is not None:
@@ -266,9 +268,11 @@ class MobileCoreDenoiser(nn.Module):
                 guidance = torch.full((B,), float(guidance), device=x.device, dtype=torch.float32)
             elif guidance.dim() == 0:
                 guidance = guidance.repeat(B)
-            c = c + self.guidance_mlp(self.guidance_embed(guidance))
+            c = c + self.guidance_mlp(self.guidance_embed(guidance).to(dtype=x.dtype))
 
         # 3. Pooling de texto y modulación global c
+        if txt.dtype != x.dtype:
+            txt = txt.to(dtype=x.dtype)
         if mask is not None:
             m = mask.unsqueeze(-1).to(txt.dtype)
             pooled = (txt * m).sum(dim=1) / m.sum(dim=1).clamp(min=1.0)

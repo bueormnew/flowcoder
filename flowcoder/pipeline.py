@@ -31,8 +31,9 @@ class FlowCoderPipeline:
         self.text_encoder = text_encoder
         self.vae = vae
         self.config = config or PipelineConfig(core=core.config)
-        self.device = torch.device("cpu")
-        self.dtype = torch.float32
+        first_param = next(core.parameters(), None)
+        self.device = first_param.device if first_param is not None else torch.device("cpu")
+        self.dtype = first_param.dtype if first_param is not None else torch.float32
 
     def to(self, device: Union[str, torch.device], dtype: Optional[torch.dtype] = None) -> "FlowCoderPipeline":
         """Mueve todo el pipeline al dispositivo y precisión deseados."""
@@ -62,17 +63,33 @@ class FlowCoderPipeline:
         # 1. Configurar Text Encoder
         if isinstance(text_encoder, str):
             enc = HFTextEncoder(text_encoder)
+            encoder_type = "hf"
+            encoder_name_or_path = text_encoder
         else:
             enc = text_encoder
+            encoder_type = "hf" if isinstance(text_encoder, HFTextEncoder) else "custom"
+            encoder_name_or_path = getattr(text_encoder, "model_name_or_path", "custom")
 
         # 2. Configurar VAE
         if isinstance(vae, str):
             if vae.lower() in ["tiny", "taesd"]:
                 v = TinyVAE()
+                vae_type = "taesd"
             else:
                 v = DiffusersVAE(vae)
+                vae_type = "diffusers"
+            vae_name_or_path = vae
         else:
             v = vae
+            if isinstance(vae, TinyVAE):
+                vae_type = "taesd"
+                vae_name_or_path = "tiny"
+            elif isinstance(vae, DiffusersVAE):
+                vae_type = "diffusers"
+                vae_name_or_path = getattr(vae, "model_name_or_path", "diffusers")
+            else:
+                vae_type = "custom"
+                vae_name_or_path = "custom"
 
         # 3. Configurar CORE
         if core_config is None:
@@ -89,7 +106,13 @@ class FlowCoderPipeline:
         core_model = MobileCoreDenoiser(core_config)
         pipe_cfg = PipelineConfig(
             core=core_config,
+            encoder_type=encoder_type,
+            encoder_name_or_path=encoder_name_or_path,
+            vae_type=vae_type,
+            vae_name_or_path=vae_name_or_path,
+            vae_scale_factor=getattr(v, "scale_factor", 0.18215),
             resolution=resolution,
+            max_text_len=getattr(enc, "max_length", 77),
         )
         return cls(core=core_model, text_encoder=enc, vae=v, config=pipe_cfg)
 
@@ -206,25 +229,55 @@ class FlowCoderPipeline:
     def from_pretrained(
         cls,
         load_directory: Union[str, Path],
-        device: str = "cpu",
+        device: Union[str, torch.device] = "cpu",
         dtype: torch.dtype = torch.float32,
+        text_encoder: Optional[BaseTextEncoder] = None,
+        vae: Optional[BaseVAE] = None,
     ) -> "FlowCoderPipeline":
         """Carga un pipeline completo guardado previamente."""
         p = Path(load_directory)
         cfg = PipelineConfig.from_json(p / "pipeline_config.json")
+
+        enc_arg: Union[str, BaseTextEncoder]
+        if text_encoder is not None:
+            enc_arg = text_encoder
+        elif cfg.encoder_type == "custom" or cfg.encoder_name_or_path == "custom":
+            raise ValueError(
+                "PipelineConfig indica un encoder personalizado ('custom'). "
+                "Pasa `text_encoder=...` explícitamente a `FlowCoderPipeline.from_pretrained(...)`."
+            )
+        else:
+            enc_arg = cfg.encoder_name_or_path
+
+        vae_arg: Union[str, BaseVAE]
+        if vae is not None:
+            vae_arg = vae
+        elif cfg.vae_type == "custom" or cfg.vae_name_or_path == "custom":
+            raise ValueError(
+                "PipelineConfig indica un VAE personalizado ('custom'). "
+                "Pasa `vae=...` explícitamente a `FlowCoderPipeline.from_pretrained(...)`."
+            )
+        else:
+            vae_arg = cfg.vae_name_or_path
+
         pipe = cls.create(
             core_config=cfg.core,
-            text_encoder=cfg.encoder_name_or_path,
-            vae=cfg.vae_name_or_path,
+            text_encoder=enc_arg,
+            vae=vae_arg,
             resolution=cfg.resolution,
         )
 
         weights_file = p / "core.safetensors"
+        pt_file = p / "core.pt"
         if weights_file.exists():
             from safetensors.torch import load_file
-            state = load_file(str(weights_file), device=device)
+            state = load_file(str(weights_file), device="cpu")
+        elif pt_file.exists():
+            state = torch.load(str(pt_file), map_location="cpu", weights_only=True)
         else:
-            state = torch.load(str(p / "core.pt"), map_location=device)
+            raise FileNotFoundError(
+                f"No se encontraron pesos del CORE ('core.safetensors' ni 'core.pt') en {p}"
+            )
 
         pipe.core.load_state_dict(state)
         return pipe.to(device=device, dtype=dtype)

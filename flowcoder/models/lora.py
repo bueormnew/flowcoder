@@ -3,6 +3,7 @@ import math
 from typing import Dict, Any, List, Optional
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from pathlib import Path
 
 from ..config import LoRAConfig
@@ -16,13 +17,16 @@ class LoRALinear(nn.Module):
         self.r = r
         self.alpha = alpha
         self.scaling = alpha / r
+        self.merged = False
         self.dropout = nn.Dropout(p=dropout) if dropout > 0.0 else nn.Identity()
 
         in_features = base_layer.in_features
         out_features = base_layer.out_features
+        device = base_layer.weight.device
+        dtype = base_layer.weight.dtype
 
-        self.lora_A = nn.Parameter(torch.zeros(r, in_features))
-        self.lora_B = nn.Parameter(torch.zeros(out_features, r))
+        self.lora_A = nn.Parameter(torch.zeros(r, in_features, device=device, dtype=dtype))
+        self.lora_B = nn.Parameter(torch.zeros(out_features, r, device=device, dtype=dtype))
         
         # Inicialización: A con kaiming_uniform, B con ceros (para iniciar como identidad)
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
@@ -35,11 +39,15 @@ class LoRALinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         base_out = self.base_layer(x)
+        if self.merged:
+            return base_out
         lora_out = self.dropout(x) @ self.lora_A.T @ self.lora_B.T * self.scaling
         return base_out + lora_out
 
     def merge(self) -> None:
         """Fusiona los pesos de LoRA en la capa base para inferencia de costo cero."""
+        if self.merged:
+            return
         with torch.no_grad():
             self.base_layer.weight.data += (self.lora_B @ self.lora_A) * self.scaling
         self.merged = True
@@ -53,14 +61,17 @@ class LoRAConv2d(nn.Module):
         self.r = r
         self.alpha = alpha
         self.scaling = alpha / r
+        self.merged = False
         self.dropout = nn.Dropout2d(p=dropout) if dropout > 0.0 else nn.Identity()
 
         in_channels = base_layer.in_channels
         out_channels = base_layer.out_channels
         kernel_size = base_layer.kernel_size
+        device = base_layer.weight.device
+        dtype = base_layer.weight.dtype
 
-        self.lora_A = nn.Parameter(torch.zeros(r, in_channels, *kernel_size))
-        self.lora_B = nn.Parameter(torch.zeros(out_channels, r, 1, 1))
+        self.lora_A = nn.Parameter(torch.zeros(r, in_channels, *kernel_size, device=device, dtype=dtype))
+        self.lora_B = nn.Parameter(torch.zeros(out_channels, r, 1, 1, device=device, dtype=dtype))
 
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
         nn.init.zeros_(self.lora_B)
@@ -71,6 +82,8 @@ class LoRAConv2d(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         base_out = self.base_layer(x)
+        if self.merged:
+            return base_out
         # Convolución con A y luego con B
         lora_h = F.conv2d(
             self.dropout(x),
@@ -82,6 +95,16 @@ class LoRAConv2d(nn.Module):
         )
         lora_out = F.conv2d(lora_h, self.lora_B) * self.scaling
         return base_out + lora_out
+
+    def merge(self) -> None:
+        """Fusiona los pesos de LoRA en la capa Conv2d base."""
+        if self.merged:
+            return
+        with torch.no_grad():
+            out_c = self.base_layer.out_channels
+            delta = (self.lora_B.view(out_c, self.r) @ self.lora_A.view(self.r, -1)).view_as(self.base_layer.weight)
+            self.base_layer.weight.data += delta * self.scaling
+        self.merged = True
 
 
 def inject_lora(model: nn.Module, config: LoRAConfig) -> nn.Module:
@@ -112,7 +135,7 @@ def get_lora_state_dict(model: nn.Module) -> Dict[str, torch.Tensor]:
 def merge_lora(model: nn.Module) -> nn.Module:
     """Recorre el modelo y fusiona todos los pesos LoRA con las capas base."""
     for module in model.modules():
-        if isinstance(module, LoRALinear):
+        if isinstance(module, (LoRALinear, LoRAConv2d)):
             module.merge()
     return model
 
@@ -136,6 +159,6 @@ def load_lora_weights(model: nn.Module, path: Path | str) -> nn.Module:
         from safetensors.torch import load_file
         state = load_file(str(p))
     else:
-        state = torch.load(str(p), map_location="cpu")
+        state = torch.load(str(p), map_location="cpu", weights_only=True)
     model.load_state_dict(state, strict=False)
     return model

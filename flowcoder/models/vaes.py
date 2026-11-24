@@ -33,6 +33,7 @@ class DiffusersVAE(BaseVAE):
     """Wrapper para modelos VAE de Hugging Face Diffusers (ej. AutoencoderKL de SD)."""
     def __init__(self, model_name_or_path: str = "stabilityai/sd-vae-ft-mse", scale_factor: float = 0.18215):
         super().__init__()
+        self.model_name_or_path = model_name_or_path
         from diffusers import AutoencoderKL
         self.vae = AutoencoderKL.from_pretrained(model_name_or_path)
         self.scale_factor = scale_factor

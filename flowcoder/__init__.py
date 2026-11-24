@@ -5,15 +5,8 @@ Based on Rectified Flow, Depthwise-Attention Hybrid CORE, and 1-8 Step Infiltrat
 """
 
 # Patch de compatibilidad para PyTorch en entornos con versiones dispares (ej. Kaggle / Colab)
-import torch
-try:
-    import torch._utils
-    if not hasattr(torch._utils, "_chunk_or_narrow_cat"):
-        def _chunk_or_narrow_cat(tensor, num_chunks, narrow_dim, cat_dim=0):
-            return torch.cat(torch.chunk(tensor, num_chunks, dim=narrow_dim), dim=cat_dim)
-        torch._utils._chunk_or_narrow_cat = _chunk_or_narrow_cat
-except Exception:
-    pass
+from ._compat import apply_torch_compat_patches
+apply_torch_compat_patches()
 
 from .config import (
     CoreConfig,

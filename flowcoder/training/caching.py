@@ -37,6 +37,11 @@ class CacheManager:
         pipeline.text_encoder.eval()
 
         N = len(texts)
+        if N == 0:
+            raise ValueError("texts no puede estar vacío.")
+        if len(images) != N:
+            raise ValueError(f"La cantidad de imágenes ({len(images)}) no coincide con textos ({N}).")
+
         lat_list = []
         emb_list = []
         mask_list = []
@@ -53,11 +58,12 @@ class CacheManager:
         # 2. Precomputar latentes de imágenes
         if isinstance(images, torch.Tensor):
             for i in range(0, N, batch_size):
-                batch_imgs = images[i:i + batch_size].to(device)
+                batch_imgs = images[i:i + batch_size].to(device=device, dtype=pipeline.dtype)
                 z = pipeline.vae.encode(batch_imgs)
                 lat_list.append(z.cpu().half())
         else:
             # Lista de imágenes PIL o arrays
+            from PIL import Image
             from torchvision import transforms
             tx = transforms.Compose([
                 transforms.Resize((pipeline.config.resolution, pipeline.config.resolution)),
@@ -65,7 +71,11 @@ class CacheManager:
                 transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
             ])
             for i in range(0, N, batch_size):
-                batch_imgs = torch.stack([tx(img) for img in images[i:i + batch_size]]).to(device)
+                pil_batch = [
+                    img.convert("RGB") if hasattr(img, "convert") else Image.fromarray(img).convert("RGB")
+                    for img in images[i:i + batch_size]
+                ]
+                batch_imgs = torch.stack([tx(img) for img in pil_batch]).to(device=device, dtype=pipeline.dtype)
                 z = pipeline.vae.encode(batch_imgs)
                 lat_list.append(z.cpu().half())
 

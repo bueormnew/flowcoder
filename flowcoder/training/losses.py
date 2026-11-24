@@ -55,9 +55,14 @@ class FlowMatchingLoss(nn.Module):
             drop = torch.rand(B, device=device) < cfg_dropout
             if drop.any():
                 core_model = getattr(model, "module", model)
-                null_tokens = core_model.null_text_token.expand(drop.sum(), txt_ctx.shape[1], -1)
+                null_tokens = core_model.null_text_token.to(
+                    device=txt_ctx.device, dtype=txt_ctx.dtype
+                ).expand(drop.sum(), txt_ctx.shape[1], -1)
                 txt_ctx = txt_ctx.clone()
                 txt_ctx[drop] = null_tokens
+                if txt_mask is not None:
+                    txt_mask = txt_mask.clone()
+                    txt_mask[drop] = True
 
         # 6. Predicción de velocidad del CORE
         pred_v = model(xt, t, txt_ctx, txt_mask, guidance=guidance)
@@ -82,14 +87,16 @@ class EndToEndReconstructionLoss(nn.Module):
     def _gradient_loss(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         # Extrae gradientes espaciales canal por canal
         B, C, H, W = pred.shape
+        sobel_x = self.sobel_x.to(device=pred.device, dtype=pred.dtype)
+        sobel_y = self.sobel_y.to(device=pred.device, dtype=pred.dtype)
         loss = 0.0
         for c in range(C):
             p = pred[:, c:c+1]
             t = target[:, c:c+1]
-            gx_p = F.conv2d(p, self.sobel_x, padding=1)
-            gy_p = F.conv2d(p, self.sobel_y, padding=1)
-            gx_t = F.conv2d(t, self.sobel_x, padding=1)
-            gy_t = F.conv2d(t, self.sobel_y, padding=1)
+            gx_p = F.conv2d(p, sobel_x, padding=1)
+            gy_p = F.conv2d(p, sobel_y, padding=1)
+            gx_t = F.conv2d(t, sobel_x, padding=1)
+            gy_t = F.conv2d(t, sobel_y, padding=1)
             loss += F.l1_loss(gx_p, gx_t) + F.l1_loss(gy_p, gy_t)
         return loss / C
 

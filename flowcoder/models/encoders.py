@@ -4,6 +4,8 @@ from typing import Tuple, List, Optional
 import torch
 import torch.nn as nn
 
+from .._compat import apply_torch_compat_patches
+
 
 class BaseTextEncoder(nn.Module, ABC):
     """Interfaz base para cualquier Text Encoder en FlowCoder."""
@@ -35,23 +37,26 @@ class HFTextEncoder(BaseTextEncoder):
         self.max_length = max_length
         self._dim = None
 
-        # Asegurar parche de compatibilidad para PyTorch / transformers distributed utils
-        try:
-            import torch._utils
-            if not hasattr(torch._utils, "_chunk_or_narrow_cat"):
-                def _chunk_or_narrow_cat(tensor, num_chunks, narrow_dim, cat_dim=0):
-                    return torch.cat(torch.chunk(tensor, num_chunks, dim=narrow_dim), dim=cat_dim)
-                torch._utils._chunk_or_narrow_cat = _chunk_or_narrow_cat
-        except Exception:
-            pass
+        # Asegurar parches de compatibilidad para PyTorch / transformers distributed utils
+        apply_torch_compat_patches()
 
         from transformers import AutoTokenizer, AutoModel
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-        
+        if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
         # Detectar si es un encoder T5 o CLIP o modelo general
         if "t5" in model_name_or_path.lower():
-            from transformers import T5EncoderModel
-            self.model = T5EncoderModel.from_pretrained(model_name_or_path)
+            try:
+                from transformers import T5EncoderModel
+                self.model = T5EncoderModel.from_pretrained(model_name_or_path)
+            except (AttributeError, ImportError):
+                # Re-aplicar parches por si transformers se cargó parcialmente y usar AutoModel
+                apply_torch_compat_patches()
+                self.model = AutoModel.from_pretrained(model_name_or_path)
+                if hasattr(self.model, "encoder") and not hasattr(self.model, "last_hidden_state"):
+                    # T5Model completo: conservar sólo el encoder si está disponible
+                    self.model = self.model.encoder
             self._dim = self.model.config.d_model
         elif "clip" in model_name_or_path.lower():
             from transformers import CLIPTextModel
@@ -65,10 +70,10 @@ class HFTextEncoder(BaseTextEncoder):
     def output_dim(self) -> int:
         return self._dim
 
-    def forward(self, texts: List[str] | torch.Tensor, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-        if isinstance(texts, list):
+    def forward(self, texts: List[str] | Tuple[str, ...] | torch.Tensor, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+        if isinstance(texts, (list, tuple)):
             tokens = self.tokenizer(
-                texts,
+                list(texts),
                 padding="max_length",
                 max_length=self.max_length,
                 truncation=True,
@@ -101,9 +106,9 @@ class CustomTextEncoder(BaseTextEncoder):
     def output_dim(self) -> int:
         return self._output_dim
 
-    def forward(self, texts: List[str] | torch.Tensor, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-        if self.tokenizer_fn is not None and isinstance(texts, list):
-            tokens, mask = self.tokenizer_fn(texts, max_length=self.max_length, device=device)
+    def forward(self, texts: List[str] | Tuple[str, ...] | torch.Tensor, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.tokenizer_fn is not None and isinstance(texts, (list, tuple)):
+            tokens, mask = self.tokenizer_fn(list(texts), max_length=self.max_length, device=device)
             embs = self.encoder(tokens)
             return embs, mask
         elif isinstance(texts, torch.Tensor):

@@ -33,7 +33,7 @@ class FlowTrainer:
         out_path.mkdir(parents=True, exist_ok=True)
 
         self.pipeline.core.train()
-        self.pipeline.core.to(self.device)
+        self.pipeline.core.to(device=self.device, dtype=torch.float32)
 
         # Usar DataParallel si hay múltiples GPUs disponibles (ej. Kaggle T4 x2)
         n_gpus = torch.cuda.device_count() if self.device.type == "cuda" else 0
@@ -45,8 +45,10 @@ class FlowTrainer:
             dataset,
             batch_size=self.config.batch_size,
             shuffle=True,
-            drop_last=True,
+            drop_last=(len(dataset) >= self.config.batch_size),
         )
+        if len(loader) == 0:
+            raise ValueError("El dataset está vacío; no se puede entrenar.")
 
         optimizer = torch.optim.AdamW(
             self.pipeline.core.parameters(),
@@ -54,7 +56,12 @@ class FlowTrainer:
             weight_decay=self.config.weight_decay,
         )
 
-        scaler = torch.amp.GradScaler(self.device.type, enabled=(self.config.mixed_precision == "fp16"))
+        use_fp16 = (self.config.mixed_precision == "fp16") and (self.device.type == "cuda")
+        use_bf16 = (self.config.mixed_precision == "bf16") and (self.device.type in ("cuda", "cpu"))
+        amp_enabled = use_fp16 or use_bf16
+        amp_dtype = torch.float16 if use_fp16 else torch.bfloat16
+
+        scaler = torch.amp.GradScaler(self.device.type, enabled=use_fp16)
         losses = []
 
         print(f"[FlowTrainer] Iniciando entrenamiento del CORE por {self.config.epochs} épocas...")
@@ -65,7 +72,7 @@ class FlowTrainer:
                 txt_ctx = txt_ctx.to(self.device, dtype=torch.float32)
                 txt_mask = txt_mask.to(self.device)
 
-                with torch.amp.autocast(self.device.type, enabled=(self.config.mixed_precision == "fp16")):
+                with torch.amp.autocast(self.device.type, dtype=amp_dtype, enabled=amp_enabled):
                     loss = self.loss_fn(
                         model=net,
                         x0=latents,
@@ -118,15 +125,19 @@ class LoRATrainer:
 
     def train(self, dataset: LatentTextCacheDataset, save_path: str | Path = "./lora_weights.safetensors") -> List[float]:
         self.pipeline.core.train()
-        self.pipeline.core.to(self.device)
+        self.pipeline.core.to(device=self.device, dtype=torch.float32)
 
         n_gpus = torch.cuda.device_count() if self.device.type == "cuda" else 0
         net = nn.DataParallel(self.pipeline.core) if n_gpus > 1 else self.pipeline.core
 
         trainable_params = [p for p in self.pipeline.core.parameters() if p.requires_grad]
+        if not trainable_params:
+            raise ValueError("No se encontraron parámetros LoRA entrenables. Verifica target_modules en LoRAConfig.")
         optimizer = torch.optim.AdamW(trainable_params, lr=self.train_config.lr * 2.0)
 
         loader = DataLoader(dataset, batch_size=self.train_config.batch_size, shuffle=True)
+        if len(loader) == 0:
+            raise ValueError("El dataset está vacío; no se puede entrenar LoRA.")
         losses = []
 
         print(f"[LoRATrainer] Entrenando {sum(p.numel() for p in trainable_params)/1e6:.2f}M parámetros LoRA...")
