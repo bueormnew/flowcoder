@@ -53,7 +53,8 @@ class FlowMatchingLoss(nn.Module):
         if cfg_dropout > 0.0:
             drop = torch.rand(B, device=device) < cfg_dropout
             if drop.any():
-                null_tokens = model.null_text_token.expand(drop.sum(), txt_ctx.shape[1], -1)
+                core_model = getattr(model, "module", model)
+                null_tokens = core_model.null_text_token.expand(drop.sum(), txt_ctx.shape[1], -1)
                 txt_ctx = txt_ctx.clone()
                 txt_ctx[drop] = null_tokens
 

@@ -34,6 +34,12 @@ class FlowTrainer:
         self.pipeline.core.train()
         self.pipeline.core.to(self.device)
 
+        # Usar DataParallel si hay múltiples GPUs disponibles (ej. Kaggle T4 x2)
+        n_gpus = torch.cuda.device_count() if self.device.type == "cuda" else 0
+        net = nn.DataParallel(self.pipeline.core) if n_gpus > 1 else self.pipeline.core
+        if n_gpus > 1:
+            print(f"[FlowTrainer] Activando DataParallel en {n_gpus} GPUs.")
+
         loader = DataLoader(
             dataset,
             batch_size=self.config.batch_size,
@@ -60,7 +66,7 @@ class FlowTrainer:
 
                 with torch.amp.autocast(self.device.type, enabled=(self.config.mixed_precision == "fp16")):
                     loss = self.loss_fn(
-                        model=self.pipeline.core,
+                        model=net,
                         x0=latents,
                         txt_ctx=txt_ctx,
                         txt_mask=txt_mask,
@@ -113,6 +119,9 @@ class LoRATrainer:
         self.pipeline.core.train()
         self.pipeline.core.to(self.device)
 
+        n_gpus = torch.cuda.device_count() if self.device.type == "cuda" else 0
+        net = nn.DataParallel(self.pipeline.core) if n_gpus > 1 else self.pipeline.core
+
         trainable_params = [p for p in self.pipeline.core.parameters() if p.requires_grad]
         optimizer = torch.optim.AdamW(trainable_params, lr=self.train_config.lr * 2.0)
 
@@ -128,7 +137,7 @@ class LoRATrainer:
                 txt_mask = txt_mask.to(self.device)
 
                 loss = self.loss_fn(
-                    model=self.pipeline.core,
+                    model=net,
                     x0=latents,
                     txt_ctx=txt_ctx,
                     txt_mask=txt_mask,
