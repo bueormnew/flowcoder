@@ -1,3 +1,4 @@
+from __future__ import annotations
 from .caching import CacheManager, LatentTextCacheDataset
 from .losses import FlowMatchingLoss, EndToEndReconstructionLoss
 from .trainer import FlowTrainer, LoRATrainer, EndToEndFinetuner

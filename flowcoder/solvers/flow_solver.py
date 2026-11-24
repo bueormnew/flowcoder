@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import Optional, Callable
 import torch
 import torch.nn as nn

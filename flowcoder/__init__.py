@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 FlowCoder: Ultra-Fast, Mobile-Friendly Hybrid Generative Framework
 Based on Rectified Flow, Depthwise-Attention Hybrid CORE, and 1-8 Step Infiltration.

@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import List, Optional, Union, Dict, Any
 from pathlib import Path
 import json

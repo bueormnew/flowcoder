@@ -1,3 +1,4 @@
+from __future__ import annotations
 from .core import MobileCoreDenoiser
 from .encoders import BaseTextEncoder, HFTextEncoder, CustomTextEncoder
 from .vaes import BaseVAE, DiffusersVAE, TinyVAE, CustomVAE

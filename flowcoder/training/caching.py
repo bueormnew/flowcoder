@@ -1,4 +1,5 @@
-from typing import List, Optional, Tuple
+from __future__ import annotations
+from typing import List, Optional, Tuple, Any
 from pathlib import Path
 import torch
 from torch.utils.data import Dataset, DataLoader
